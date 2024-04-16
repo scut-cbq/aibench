@@ -2,8 +2,8 @@ import argparse
 import torch
 import random
 import numpy as np
-from loguru import logger
 import os
+from loguru import logger
 
 from exp.exp_main import Exp_Main
 
@@ -14,7 +14,7 @@ def Args():
     # public args
     parser.add_argument('--root_path', type=str, default='./dataset/', help='root path of the data file')
     parser.add_argument('--data_path', type=str, default='traffic.csv', help='data file')
-    parser.add_argument('--checkpoints', type=str, default='./checkpoints', help='location of model checkpoints')
+    parser.add_argument('--model_path', type=str, default='./model/checkpoint.pth', help='location of model checkpoints')
     parser.add_argument('--seq_len', type=int, default=720, help='input sequence length')
     parser.add_argument('--pred_len', type=int, default=96, help='prediction sequence length')
     parser.add_argument('--batch_size', type=int, default=16, help='batch size of train input data')
@@ -85,9 +85,9 @@ def Args():
 def main():
     args = Args()
 
-    logger.level('bench', no=100, color='<magenta><bold>') 
+    logger.level('bench', no=100, color='<magenta><bold>')
     logger.add(sink=f'results/batch{args.batch_size}_seqlen{args.seq_len}_predlen{args.pred_len}.csv', format="{message}", encoding='utf-8', level='bench', mode='w')
-    logger.log('bench', 'train t (s),acc train t (s),MSE,MAE')
+    logger.log('bench', 'infer t (s),MSE,MAE')
 
     # random seed
     fix_seed = args.random_seed
@@ -116,10 +116,8 @@ def main():
             args.des,ii)
 
         exp = Exp(args)  # set experiments
-        print('>>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>'.format(setting))
-        exp.train(setting)
-
-        torch.cuda.empty_cache()
+        print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
+        exp.test(setting, test=1)
 
 if __name__ == '__main__':
     main()

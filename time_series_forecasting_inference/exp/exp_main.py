@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from loguru import logger
+from tqdm import tqdm
 
 warnings.filterwarnings('ignore')
 
@@ -163,25 +164,18 @@ class Exp_Main(Exp_Basic):
             training_time = 0
             # max_memory = 0
             for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(train_loader):
-                batch_x = batch_x.float()
-                batch_y = batch_y.float()
-                batch_x_mark = batch_x_mark.float()
-                batch_y_mark = batch_y_mark.float()
+                start = time.time()
+                iter_count += 1
+                model_optim.zero_grad()
+                batch_x = batch_x.float().to(self.device)
+
+                batch_y = batch_y.float().to(self.device)
+                batch_x_mark = batch_x_mark.float().to(self.device)
+                batch_y_mark = batch_y_mark.float().to(self.device)
 
                 # decoder input
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
-                dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float()
-
-                iter_count += 1
-                start = time.time()
-                model_optim.zero_grad()
-
-                batch_x = batch_x.to(self.device)
-                batch_y = batch_y.to(self.device)
-                batch_x_mark = batch_x_mark.to(self.device)
-                batch_y_mark = batch_y_mark.to(self.device)
-
-                dec_inp = dec_inp.to(self.device)
+                dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
 
                 # encoder - decoder
                 if self.args.use_amp:
@@ -215,16 +209,6 @@ class Exp_Main(Exp_Basic):
                     loss = criterion(outputs, batch_y)
                     train_loss.append(loss.item())
 
-                if self.args.use_amp:
-                    scaler.scale(loss).backward()
-                    scaler.step(model_optim)
-                    scaler.update()
-                else:
-                    loss.backward()
-                    model_optim.step()
-                    
-                training_time += time.time() - start
-
                 if (i + 1) % 100 == 0:
                     print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
                     speed = (time.time() - time_now) / iter_count
@@ -233,6 +217,14 @@ class Exp_Main(Exp_Basic):
                     iter_count = 0
                     time_now = time.time()
 
+                if self.args.use_amp:
+                    scaler.scale(loss).backward()
+                    scaler.step(model_optim)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    model_optim.step()
+
                 # current_memory = torch.cuda.max_memory_allocated() / 1024 ** 2
                 # max_memory = max(max_memory, current_memory)
 
@@ -240,6 +232,7 @@ class Exp_Main(Exp_Basic):
                     adjust_learning_rate(model_optim, scheduler, epoch + 1, self.args, printout=False)
                     scheduler.step()
 
+                training_time += time.time() - start
 
             acc_time += training_time
             print("Epoch: {} cost time: {}".format(epoch + 1, training_time))
@@ -273,28 +266,39 @@ class Exp_Main(Exp_Basic):
         
         if test:
             print('loading model')
-            self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
+            self.model.load_state_dict(torch.load(self.args.model_path, map_location=self.args.device))
+            self.model = self.model.to(self.args.device)
 
         preds = []
         trues = []
         inputx = []
-        folder_path = './test_results/' + setting + '/'
-        if not os.path.exists(folder_path):
-            os.makedirs(folder_path)
 
         begin_time = time.time()
         self.model.eval()
-        with torch.no_grad():
-            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(test_loader):
-                batch_x = batch_x.float().to(self.device)
-                batch_y = batch_y.float().to(self.device)
 
-                batch_x_mark = batch_x_mark.float().to(self.device)
-                batch_y_mark = batch_y_mark.float().to(self.device)
+        infer_time = 0
+
+        with torch.no_grad():
+            for batch_x, batch_y, batch_x_mark, batch_y_mark in tqdm(test_loader):
+                batch_x = batch_x.float()
+                batch_y = batch_y.float()
+                batch_x_mark = batch_x_mark.float()
+                batch_y_mark = batch_y_mark.float() 
 
                 # decoder input
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
-                dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
+                dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float()
+
+                start = time.time()
+
+                batch_x = batch_x.to(self.device)
+                batch_y = batch_y.to(self.device)
+
+                batch_x_mark = batch_x_mark.to(self.device)
+                batch_y_mark = batch_y_mark.to(self.device)
+
+                dec_inp = dec_inp.to(self.device)
+
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
@@ -315,6 +319,8 @@ class Exp_Main(Exp_Basic):
                         else:
                             outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
 
+                infer_time += time.time() - start
+
                 f_dim = -1 if self.args.features == 'MS' else 0
                 # print(outputs.shape,batch_y.shape)
                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
@@ -328,11 +334,6 @@ class Exp_Main(Exp_Basic):
                 preds.append(pred)
                 trues.append(true)
                 inputx.append(batch_x.detach().cpu().numpy())
-                if i % 20 == 0:
-                    input = batch_x.detach().cpu().numpy()
-                    gt = np.concatenate((input[0, :, -1], true[0, :, -1]), axis=0)
-                    pd = np.concatenate((input[0, :, -1], pred[0, :, -1]), axis=0)
-                    visual(gt, pd, os.path.join(folder_path, str(i) + '.pdf'))
 
         ms = (time.time() - begin_time) * 1000 / len(test_data)
 
@@ -347,24 +348,8 @@ class Exp_Main(Exp_Basic):
         trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
         inputx = inputx.reshape(-1, inputx.shape[-2], inputx.shape[-1])
 
-        # result save
-        folder_path = './results/' + setting + '/'
-        if not os.path.exists(folder_path):
-            os.makedirs(folder_path)
-
         mae, mse, rmse, mape, mspe, rse, corr = metric(preds, trues)
-        print('mse:{}, mae:{}, ms/sample:{}'.format(mse, mae, ms))
-        f = open("result.txt", 'a')
-        f.write(setting + "  \n")
-        f.write('mse:{}, mae:{}, ms/sample:{}'.format(mse, mae, ms))
-        f.write('\n')
-        f.write('\n')
-        f.close()
-
-        # np.save(folder_path + 'metrics.npy', np.array([mae, mse, rmse, mape, mspe,rse, corr]))
-        np.save(folder_path + 'pred.npy', preds)
-        # np.save(folder_path + 'true.npy', trues)
-        # np.save(folder_path + 'x.npy', inputx)
+        logger.log('bench', f'{infer_time},{mse},{mae}')
         return
 
     def predict(self, setting, load=False):

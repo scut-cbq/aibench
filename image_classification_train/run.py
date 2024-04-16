@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import time
+import os
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from loguru import logger
@@ -14,23 +15,29 @@ from utils.pipeline.dataset import DataSet
 
 def Args():
     parser = argparse.ArgumentParser(description="settings")
-    # model ResNet-101
-    parser.add_argument("--num_heads", default=1, type=int)
-    parser.add_argument("--lam",default=0.1, type=float)
-    # dataset
-    parser.add_argument("--train_aug", default=["randomflip", "resizedcrop"], type=list)
-    parser.add_argument("--test_aug", default=[], type=list)
-    parser.add_argument("--img_size", default=448, type=int)
+
+    # public args
     parser.add_argument("--batch_size", default=16, type=int)
-    # optimizer, default SGD
-    parser.add_argument("--lr", default=0.01, type=float)
-    parser.add_argument("--momentum", default=0.9, type=float)
-    parser.add_argument("--w_d", default=0.0001, type=float, help="weight_decay")
-    parser.add_argument("--warmup_epoch", default=2, type=int)
-    parser.add_argument("--total_epoch", default=30, type=int)
-    parser.add_argument("--print_freq", default=100, type=int)
-    
-    return parser.parse_args()
+    parser.add_argument('--num_workers', type=int, default=os.cpu_count(), choices=range(os.cpu_count() + 1), help='how many subprocesses to use for data loading (default all threads)')
+    parser.add_argument('--gpu', type=int, default=0, help='use which gpu')
+
+    args = parser.parse_args()
+
+    # private args
+    args.num_heads = 1
+    args.lam = 0.1
+    args.train_aug = ["randomflip", "resizedcrop"]
+    args.test_aug = []
+    args.img_size = 448
+    args.lr = 0.01
+    args.momentum = 0.9
+    args.w_d = 0.0001
+    args.warmup_epoch = 2
+    args.total_epoch = 30
+    args.print_freq = 100
+    args.device = f'cuda:{args.gpu}'
+
+    return args
 
 def train(i, args, model, train_loader, optimizer, warmup_scheduler):
     model.train()
@@ -40,8 +47,8 @@ def train(i, args, model, train_loader, optimizer, warmup_scheduler):
     for index, data in enumerate(train_loader):
         start = time.time()
         batch_begin = time.time() 
-        img = data['img'].cuda()
-        target = data['target'].cuda()
+        img = data['img'].to(args.device)
+        target = data['target'].to(args.device)
 
         optimizer.zero_grad()
         logit, loss = model(img, target)
@@ -49,6 +56,7 @@ def train(i, args, model, train_loader, optimizer, warmup_scheduler):
         loss.backward()
         optimizer.step()
         t = time.time() - batch_begin
+        training_time += time.time()-start
 
         if index % args.print_freq == 0:
             print("Epoch {}[{}/{}]: loss:{:.5f}, lr:{:.5f}, time:{:.4f}".format(
@@ -63,7 +71,6 @@ def train(i, args, model, train_loader, optimizer, warmup_scheduler):
         if warmup_scheduler and i <= args.warmup_epoch:
             warmup_scheduler.step()
         
-        training_time += time.time()-start
     
     t = time.time() - epoch_begin
     print("Epoch {} training ends, total {:.2f}s".format(i, t))
@@ -76,8 +83,8 @@ def val(i, args, model, test_loader, test_file):
 
     # calculate logit
     for index, data in enumerate(tqdm(test_loader)):
-        img = data['img'].cuda()
-        target = data['target'].cuda()
+        img = data['img'].to(args.device)
+        target = data['target'].to(args.device)
         img_path = data['img_path']
 
         with torch.no_grad():
@@ -104,7 +111,7 @@ def main():
 
     # model
     model = ResNet_CSRA(num_heads=args.num_heads, lam=args.lam, num_classes=20)
-    model = model.to('cuda')
+    model = model.to(args.device)
 
     # dataset
     train_file = ["data/voc07/trainval_voc07.json"]
@@ -113,8 +120,8 @@ def main():
 
     train_dataset = DataSet(train_file, args.train_aug, args.img_size)
     test_dataset = DataSet(test_file, args.test_aug, args.img_size)
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
     # optimizer and warmup
     backbone, classifier = [], []

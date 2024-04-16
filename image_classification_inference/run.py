@@ -15,6 +15,7 @@ def Args():
     parser.add_argument('--model_path', type=str, default='model/resnet50-19c8e357.pth', help='path to the pretrained model')
     parser.add_argument('--batch_size', type=int, default=32, help='batch size (default 32)')
     parser.add_argument('--num_workers', type=int, default=os.cpu_count(), choices=range(os.cpu_count() + 1), help='how many subprocesses to use for data loading (default all threads)')
+    parser.add_argument('--gpu', type=int, default=0, help='use which gpu')
 
     return parser.parse_args()
 
@@ -22,8 +23,10 @@ def main():
     # args
     args = Args()
 
+    device = f'cuda:{args.gpu}'
+
     # logger
-    logger.level('bench', no=100, color='<magenta><bold>') 
+    logger.level('bench', no=100, color='<magenta><bold>')
     logger.add(sink=f'results/batch{args.batch_size}.csv', format="{message}", encoding='utf-8', level='bench', mode='w')
     logger.log('bench', 'infer t (s),acc')
 
@@ -41,7 +44,7 @@ def main():
     # model
     model = torchvision.models.resnet50()
     model.load_state_dict(torch.load(args.model_path))
-    model = model.to('cuda')
+    model = model.to(device)
     model.eval()
 
     # inference
@@ -51,11 +54,12 @@ def main():
     with torch.no_grad():
         for x, y in tqdm(val_loader):
             start = time.time()
-            x = x.to('cuda')
+            x = x.to(device)
+
             pred = model(x)
 
-            correct += (pred.argmax(axis=1).cpu().apply_(lambda x: val_set.class_to_idx[str(x)])==y).sum().item()
             infer_time += time.time() - start
+            correct += (pred.argmax(axis=1).cpu().apply_(lambda x: val_set.class_to_idx[str(x)])==y).sum().item()
     
     logger.log('bench', f'{infer_time},{correct/len(val_set)}')
 
